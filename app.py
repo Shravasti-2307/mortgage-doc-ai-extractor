@@ -120,7 +120,7 @@ if st.button("⚡ Extract Fields", type="primary", disabled=not doc_text):
 
                 st.write("🤖 Calling extraction model...")
                 response = client.chat.completions.create(
-                    model="llama3-8b-8192",
+                    model="llama-3.3-70b-versatile",
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": f"Extract fields from this mortgage document:\n\n{doc_text}"}
