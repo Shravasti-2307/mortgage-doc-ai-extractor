@@ -202,9 +202,3 @@ if st.button("⚡ Extract Fields", type="primary", disabled=not doc_text):
             except Exception as e:
                 status.update(label="❌ Extraction failed", state="error")
                 st.error(f"Error: {str(e)}")
-```
-
-And your `requirements.txt` should be exactly:
-```
-groq
-streamlit
