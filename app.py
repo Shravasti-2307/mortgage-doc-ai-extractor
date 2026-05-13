@@ -1,5 +1,5 @@
 import streamlit as st
-from openai import OpenAI
+from groq import Groq
 import json
 
 st.set_page_config(
@@ -25,12 +25,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🏠 Mortgage Document AI Extractor")
-st.caption("Bronze → Azure OpenAI Extraction → Gold Layer Output")
+st.caption("Bronze → LLM Extraction → Gold Layer Output")
 
 st.markdown(
     '<div class="arch-bar">'
     '📥 Bronze: raw input &nbsp;→&nbsp;'
-    '🤖 Azure OpenAI: extraction &nbsp;→&nbsp;'
+    '🤖 LLM Extraction &nbsp;→&nbsp;'
     '📊 Gold: structured record'
     '</div>',
     unsafe_allow_html=True
@@ -72,9 +72,9 @@ Market Trend: Stable"""
 }
 
 api_key = st.sidebar.text_input(
-    "OpenAI API Key",
+    "Groq API Key",
     type="password",
-    help="Get yours at platform.openai.com"
+    help="Get yours free at console.groq.com"
 )
 
 sample = st.selectbox(
@@ -91,50 +91,59 @@ doc_text = st.text_area(
 )
 
 SYSTEM_PROMPT = """You are a mortgage document AI extraction engine for Supreme Lending.
-Extract structured fields and return ONLY valid JSON — no markdown, no explanation.
+Extract structured fields and return ONLY valid JSON — no markdown, no backticks, no explanation.
 
-Return exactly:
+Return exactly this structure:
 {
   "document_type": "Loan Application | W-2 | Appraisal | Closing Disclosure | Other",
   "fields": [
-    {"key": "field name", "value": "extracted value or null", "confidence": 0.0-1.0}
+    {"key": "field name", "value": "extracted value or null", "confidence": 0.95}
   ],
-  "overall_confidence": 0.0-1.0,
+  "overall_confidence": 0.92,
   "validation_flags": ["any anomalies or missing critical fields"],
   "extraction_notes": "1-2 sentence summary"
 }
 
 Extract 6-10 fields most important to a mortgage underwriter.
-Confidence: 0.95+ if explicit, 0.7-0.94 if inferred, below 0.7 if uncertain."""
+Confidence scoring: 0.95+ if explicitly stated, 0.70-0.94 if inferred, below 0.70 if uncertain.
+Return ONLY the JSON object. No other text."""
 
 if st.button("⚡ Extract Fields", type="primary", disabled=not doc_text):
     if not api_key:
-        st.error("Add your OpenAI API key in the sidebar.")
+        st.error("Add your Groq API key in the sidebar.")
     else:
         with st.status("Running extraction pipeline...", expanded=True) as status:
             st.write("📥 Ingesting document (Bronze layer)...")
-            
+
             try:
-                client = OpenAI(api_key=api_key)
-                
+                client = Groq(api_key=api_key)
+
                 st.write("🤖 Calling extraction model...")
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="llama3-8b-8192",
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": f"Extract fields:\n\n{doc_text}"}
+                        {"role": "user", "content": f"Extract fields from this mortgage document:\n\n{doc_text}"}
                     ],
-                    response_format={"type": "json_object"},
-                    max_tokens=1000
+                    max_tokens=1000,
+                    temperature=0.1
                 )
-                
-                raw = response.choices[0].message.content
+
+                raw = response.choices[0].message.content.strip()
+
+                # Strip markdown fences if model adds them anyway
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                raw = raw.strip()
+
                 result = json.loads(raw)
-                
+
                 st.write("📊 Validating & writing to Gold layer...")
                 status.update(label="✅ Extraction complete", state="complete")
 
-                # Doc type + confidence
+                # Doc type + overall confidence
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     st.subheader(f"📄 {result.get('document_type', 'Unknown')}")
@@ -148,19 +157,28 @@ if st.button("⚡ Extract Fields", type="primary", disabled=not doc_text):
                         unsafe_allow_html=True
                     )
 
-                # Extracted fields table
+                # Extracted fields
                 st.markdown("**Extracted fields — Gold layer**")
                 fields = result.get("fields", [])
                 for f in fields:
                     c = int(f.get("confidence", 0) * 100)
                     color = "#1D9E75" if c >= 85 else "#BA7517" if c >= 65 else "#E24B4A"
                     col_a, col_b, col_c = st.columns([3, 3, 1])
-                    col_a.markdown(f"<span style='font-size:13px;color:#888;'>{f['key']}</span>", unsafe_allow_html=True)
-                    col_b.markdown(f"<span style='font-size:13px;font-weight:500;'>{f.get('value') or '—'}</span>", unsafe_allow_html=True)
-                    col_c.markdown(f"<span style='font-size:12px;color:{color};font-weight:500;'>{c}%</span>", unsafe_allow_html=True)
+                    col_a.markdown(
+                        f"<span style='font-size:13px;color:#888;'>{f['key']}</span>",
+                        unsafe_allow_html=True
+                    )
+                    col_b.markdown(
+                        f"<span style='font-size:13px;font-weight:500;'>{f.get('value') or '—'}</span>",
+                        unsafe_allow_html=True
+                    )
+                    col_c.markdown(
+                        f"<span style='font-size:12px;color:{color};font-weight:500;'>{c}%</span>",
+                        unsafe_allow_html=True
+                    )
                     st.progress(c / 100)
 
-                # Notes
+                # Extraction notes
                 if result.get("extraction_notes"):
                     st.caption(f"📝 {result['extraction_notes']}")
 
@@ -171,12 +189,22 @@ if st.button("⚡ Extract Fields", type="primary", disabled=not doc_text):
                     for flag in flags:
                         st.warning(flag)
                 else:
-                    st.success("No validation flags — record passed all checks.")
+                    st.success("✅ No validation flags — record passed all checks.")
 
                 # Audit log
                 with st.expander("🔍 Audit log — raw model output"):
                     st.json(result)
 
+            except json.JSONDecodeError:
+                status.update(label="❌ Parse error", state="error")
+                st.error("Model returned invalid JSON. Raw output:")
+                st.code(raw)
             except Exception as e:
                 status.update(label="❌ Extraction failed", state="error")
                 st.error(f"Error: {str(e)}")
+```
+
+And your `requirements.txt` should be exactly:
+```
+groq
+streamlit
